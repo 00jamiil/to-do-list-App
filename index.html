@@ -343,22 +343,31 @@
 
             if (!text) {
                 showMessage('Please enter a task description.');
+                taskInput.focus(); // Optional: focus back on the input
                 return;
             }
 
             const newTask = {
                 id: generateId(),
                 text: text,
-                dueDate: dueDate || null,
-                createdAt: new Date().toISOString() // Store as ISO string for consistency
+                dueDate: dueDate || null, // Ensure empty string becomes null
+                createdAt: new Date().toISOString()
             };
 
             todos.push(newTask);
-            saveTasksToLocalStorage();
-            renderTasks(todos, todoListContainer, false);
+            saveTasksToLocalStorage(); // Persist the updated todos array
+            renderTasks(todos, todoListContainer, false); // Re-render the to-do list
 
-            taskInput.value = '';
-            dateInput.value = '';
+            taskInput.value = ''; // Clear the task input
+            // dateInput.value remains today's date (or user-changed) - this is fine.
+            // If we wanted to clear dateInput: dateInput.value = '';
+            // Or reset to today:
+            // const today = new Date();
+            // const year = today.getFullYear();
+            // const month = (today.getMonth() + 1).toString().padStart(2, '0');
+            // const day = today.getDate().toString().padStart(2, '0');
+            // dateInput.value = `${year}-${month}-${day}`;
+            taskInput.focus(); // Focus back on the task input for quick adding of next task
         }
 
         /**
@@ -418,6 +427,13 @@
             loadTasksFromLocalStorage();
             renderTasks(todos, todoListContainer, false);
             renderTasks(completed, completedListContainer, true);
+
+            // Set default date for date input to today
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = (today.getMonth() + 1).toString().padStart(2, '0'); // Months are 0-indexed
+            const day = today.getDate().toString().padStart(2, '0');
+            dateInput.value = `${year}-${month}-${day}`;
         }
 
         // --- Event Listeners ---
