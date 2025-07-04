@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>To-Do List App</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #111827; /* bg-gray-900 */
+        }
+        /* Custom scrollbar for a cleaner look */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #1f2937; /* bg-gray-800 */
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #4b5563; /* bg-gray-600 */
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280; /* bg-gray-500 */
+        }
+        /* Style for the date picker icon */
+        input[type="date"]::-webkit-calendar-picker-indicator {
+            filter: invert(0.8);
+            cursor: pointer;
+        }
+        .task-item:hover .actions {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-white p-4 md:p-8">
+
+    <div class="max-w-4xl mx-auto">
+        <!-- Header -->
+        <header class="text-center mb-8">
+            <h1 class="text-4xl md:text-5xl font-bold text-white">My To-Do List</h1>
+            <p class="text-gray-400 mt-2">Double-click a task's text to edit it inline.</p>
+        </header>
+
+        <!-- Add Task Form -->
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
+            <div class="flex flex-col md:flex-row gap-4">
+                <input type="text" id="task-input" placeholder="What do you need to do?" class="flex-grow bg-gray-700 text-white placeholder-gray-400 border-2 border-gray-600 rounded-md p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition">
+                <input type="date" id="date-input" class="bg-gray-700 text-white border-2 border-gray-600 rounded-md p-3 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition" title="Set a due date">
+                <button id="add-task-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-6 rounded-md transition duration-300 shadow-md hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-indigo-500">
+                    Add Task
+                </button>
+            </div>
+        </div>
+
+        <!-- Lists Container -->
+        <div class="space-y-8">
+            <!-- To-Do List -->
+            <div>
+                <h2 class="text-2xl font-semibold border-b-2 border-gray-700 pb-2 mb-4 text-indigo-300">To-Do</h2>
+                <div id="todo-list-container" class="space-y-3 min-h-[100px]">
+                    <!-- Tasks will be dynamically inserted here -->
+                </div>
+            </div>
+
+            <!-- Completed List -->
+            <div>
+                <h2 class="text-2xl font-semibold border-b-2 border-gray-700 pb-2 mb-4 text-green-300">Completed</h2>
+                <div id="completed-list-container" class="space-y-3 min-h-[100px]">
+                     <!-- Completed tasks will be dynamically inserted here -->
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Custom Message Modal -->
+    <div id="message-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center hidden z-50">
+        <div class="bg-gray-800 rounded-lg shadow-xl p-6 w-11/12 md:w-1/3 text-center">
+            <p id="message-text" class="text-lg mb-4"></p>
+            <button id="message-ok-btn" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-6 rounded-md">OK</button>
+        </div>
+    </div>
+
+    <script type="module">
+        // Firebase Imports
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- Firebase Configuration ---
+        // These variables are expected to be provided by the environment (like Canvas).
+        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-todo-app';
+        
+        // --- Firebase Services ---
+        let app, db, auth, userId;
+        let todosCollectionRef, completedCollectionRef;
+        let unsubscribeTodos, unsubscribeCompleted;
+
+        // --- UI Elements ---
+        const taskInput = document.getElementById('task-input');
+        const dateInput = document.getElementById('date-input');
+        const addTaskBtn = document.getElementById('add-task-btn');
+        const todoListContainer = document.getElementById('todo-list-container');
+        const completedListContainer = document.getElementById('completed-list-container');
+        const messageModal = document.getElementById('message-modal');
+        const messageText = document.getElementById('message-text');
+        const messageOkBtn = document.getElementById('message-ok-btn');
+
+        /**
+         * Shows a custom modal with a message. Replaces alert().
+         * @param {string} message - The message to display.
+         */
+        function showMessage(message) {
+            messageText.textContent = message;
+            messageModal.classList.remove('hidden');
+        }
+
+        messageOkBtn.addEventListener('click', () => messageModal.classList.add('hidden'));
+
+        /**
+         * Determines the background color class for a task based on its due date.
+         * @param {string} dueDateString - The due date in 'YYYY-MM-DD' format.
+         * @returns {string} The Tailwind CSS background color class.
+         */
+        function getColorForDate(dueDateString) {
+            if (!dueDateString) return 'bg-gray-700/50'; // Default color if no date
+
+            const today = new Date();
+            today.setHours(0, 0, 0, 0); // Normalize today to the start of the day
+
+            const dueDate = new Date(dueDateString + 'T00:00:00'); // Treat date as local timezone
+            
+            const diffTime = dueDate.getTime() - today.getTime();
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+            if (diffDays < 0) return 'bg-red-500/30'; // Overdue
+            if (diffDays <= 1) return 'bg-red-500/30'; // Today and tomorrow
+            if (diffDays <= 2) return 'bg-orange-500/30'; // In 2 days
+            
+            const todayDay = today.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+            const endOfWeek = new Date(today);
+            endOfWeek.setDate(today.getDate() + (6 - todayDay)); // End of current week (Saturday)
+            
+            if (dueDate <= endOfWeek) return 'bg-green-500/30'; // Within this week
+            
+            return 'bg-white/10'; // More than a week away
+        }
+
+        /**
+         * Creates an HTML element for a single task.
+         * @param {object} task - The task object from Firestore { id, text, dueDate }.
+         * @param {boolean} isCompleted - Flag to determine if the task is in the completed list.
+         * @returns {HTMLElement} The created task element.
+         */
+        function createTaskElement(task, isCompleted = false) {
+            const taskEl = document.createElement('div');
+            const bgColor = isCompleted ? 'bg-gray-700/50' : getColorForDate(task.dueDate);
+            taskEl.className = `task-item flex items-center p-3 rounded-lg transition duration-300 ${bgColor} shadow`;
+            taskEl.dataset.id = task.id;
+
+            // Checkbox for completing/uncompleting task
+            const checkContainer = document.createElement('div');
+            checkContainer.className = 'flex-shrink-0 mr-4';
+            const checkbox = document.createElement('button');
+            checkbox.className = `w-6 h-6 rounded-full flex items-center justify-center transition duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-900`;
+            checkbox.innerHTML = isCompleted 
+                ? `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-green-400" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clip-rule="evenodd" /></svg>` 
+                : `<svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7" /></svg>`;
+            checkbox.classList.add(isCompleted ? 'bg-green-800/50' : 'border-2 border-gray-500 hover:bg-gray-600');
+            checkbox.title = isCompleted ? "Mark as To-Do" : "Mark as Complete";
+            checkbox.addEventListener('click', () => toggleComplete(task, isCompleted));
+            checkContainer.appendChild(checkbox);
+
+            // Task content (text and date)
+            const content = document.createElement('div');
+            content.className = 'flex-grow';
+            
+            const textSpan = document.createElement('span');
+            textSpan.textContent = task.text;
+            textSpan.className = `cursor-pointer ${isCompleted ? 'line-through text-gray-400' : 'text-gray-100'}`;
+            if (!isCompleted) {
+                textSpan.addEventListener('dblclick', () => enableEditing(textSpan, task));
+            }
+
+            const dateSpan = document.createElement('span');
+            dateSpan.className = 'block text-xs text-gray-400 mt-1';
+            dateSpan.textContent = task.dueDate ? new Date(task.dueDate + 'T00:00:00').toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }) : 'No due date';
+
+            content.appendChild(textSpan);
+            content.appendChild(dateSpan);
+
+            // Action buttons (delete)
+            const actions = document.createElement('div');
+            actions.className = 'actions flex-shrink-0 ml-4 opacity-0 transition-opacity';
+            
+            const deleteBtn = document.createElement('button');
+            deleteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" /></svg>`;
+            deleteBtn.className = 'text-gray-500 hover:text-red-400 transition';
+            deleteBtn.title = "Delete Task";
+            deleteBtn.addEventListener('click', () => deleteTask(task.id, isCompleted));
+            actions.appendChild(deleteBtn);
+
+            taskEl.appendChild(checkContainer);
+            taskEl.appendChild(content);
+            taskEl.appendChild(actions);
+
+            return taskEl;
+        }
+
+        /**
+         * Renders a list of tasks into the specified container.
+         * @param {Array} tasks - Array of task objects.
+         * @param {HTMLElement} container - The container element to render into.
+         * @param {boolean} isCompletedList - Flag for the completed list.
+         */
+        function renderTasks(tasks, container, isCompletedList) {
+            container.innerHTML = ''; // Clear previous content
+            if (tasks.length === 0) {
+                const emptyMsg = document.createElement('p');
+                emptyMsg.textContent = isCompletedList ? 'No completed tasks yet.' : 'All tasks completed! 🎉';
+                emptyMsg.className = 'text-gray-500 text-center py-4';
+                container.appendChild(emptyMsg);
+                return;
+            }
+
+            // Sort tasks by due date (oldest first). Tasks without a date go to the end.
+            tasks.sort((a, b) => {
+                if (!a.dueDate) return 1;
+                if (!b.dueDate) return -1;
+                return new Date(a.dueDate) - new Date(b.dueDate);
+            });
+
+            tasks.forEach(task => {
+                const taskEl = createTaskElement(task, isCompletedList);
+                container.appendChild(taskEl);
+            });
+        }
+        
+        /**
+         * Enables inline editing for a task.
+         * @param {HTMLElement} textSpan - The span element containing the task text.
+         * @param {object} task - The task object.
+         */
+        function enableEditing(textSpan, task) {
+            const currentText = textSpan.textContent;
+            const parent = textSpan.parentElement;
+            
+            const input = document.createElement('input');
+            input.type = 'text';
+            input.value = currentText;
+            input.className = 'bg-gray-600 text-white w-full rounded p-1 focus:outline-none focus:ring-2 focus:ring-indigo-500';
+
+            const saveChanges = async () => {
+                const newText = input.value.trim();
+                if (newText && newText !== currentText) {
+                    const taskRef = doc(db, todosCollectionRef.path, task.id);
+                    await updateDoc(taskRef, { text: newText });
+                }
+                // The onSnapshot listener will handle re-rendering, so we don't need to manually switch back.
+            };
+
+            input.addEventListener('blur', saveChanges);
+            input.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') {
+                    input.blur();
+                } else if (e.key === 'Escape') {
+                    // To cancel, we just remove the input and the onSnapshot will re-render the original state
+                    parent.replaceChild(textSpan, input);
+                }
+            });
+
+            parent.replaceChild(input, textSpan);
+            input.focus();
+        }
+
+        /**
+         * Adds a new task to the Firestore 'todos' collection.
+         */
+        async function addTask() {
+            const text = taskInput.value.trim();
+            const dueDate = dateInput.value;
+
+            if (!text) {
+                showMessage('Please enter a task description.');
+                return;
+            }
+
+            try {
+                await addDoc(todosCollectionRef, {
+                    text: text,
+                    dueDate: dueDate || null, // Store null if no date is selected
+                    createdAt: new Date()
+                });
+                taskInput.value = '';
+                dateInput.value = '';
+            } catch (error) {
+                console.error("Error adding task: ", error);
+                showMessage("Failed to add task. Please try again.");
+            }
+        }
+
+        /**
+         * Moves a task between the 'todos' and 'completed' collections.
+         * @param {object} task - The task object to move.
+         * @param {boolean} isCompleted - The current status of the task.
+         */
+        async function toggleComplete(task, isCompleted) {
+            const batch = writeBatch(db);
+            
+            if (isCompleted) {
+                // Move from 'completed' back to 'todos'
+                const fromRef = doc(db, completedCollectionRef.path, task.id);
+                const toRef = doc(db, todosCollectionRef.path, task.id);
+                
+                const taskData = { ...task };
+                delete taskData.id; // Don't store the id as a field
+                taskData.completedAt = null; // Remove completed timestamp
+                
+                batch.set(toRef, taskData);
+                batch.delete(fromRef);
+
+            } else {
+                // Move from 'todos' to 'completed'
+                const fromRef = doc(db, todosCollectionRef.path, task.id);
+                const toRef = doc(db, completedCollectionRef.path, task.id);
+                
+                const taskData = { ...task };
+                delete taskData.id;
+                taskData.completedAt = new Date(); // Add a completed timestamp
+
+                batch.set(toRef, taskData);
+                batch.delete(fromRef);
+            }
+
+            try {
+                await batch.commit();
+            } catch (error) {
+                console.error("Error moving task: ", error);
+                showMessage("Could not update task status. Please try again.");
+            }
+        }
+
+        /**
+         * Deletes a task from its collection in Firestore.
+         * @param {string} taskId - The ID of the task to delete.
+         * @param {boolean} isCompleted - Whether the task is in the completed list.
+         */
+        async function deleteTask(taskId, isCompleted) {
+            const collection = isCompleted ? completedCollectionRef : todosCollectionRef;
+            const taskRef = doc(db, collection.path, taskId);
+            try {
+                await deleteDoc(taskRef);
+            } catch (error) {
+                console.error("Error deleting task: ", error);
+                showMessage("Failed to delete task. Please try again.");
+            }
+        }
+
+        /**
+         * Sets up Firestore snapshot listeners to react to data changes in real-time.
+         */
+        function attachFirestoreListeners() {
+            if (!userId) return;
+
+            // Define collection references
+            todosCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/todos`);
+            completedCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/completed`);
+
+            // Unsubscribe from previous listeners if they exist
+            if (unsubscribeTodos) unsubscribeTodos();
+            if (unsubscribeCompleted) unsubscribeCompleted();
+
+            // Listener for the 'todos' collection
+            unsubscribeTodos = onSnapshot(todosCollectionRef, (snapshot) => {
+                const todos = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderTasks(todos, todoListContainer, false);
+            }, (error) => {
+                console.error("Error listening to todos:", error);
+                showMessage("Error fetching to-do list.");
+            });
+
+            // Listener for the 'completed' collection
+            unsubscribeCompleted = onSnapshot(completedCollectionRef, (snapshot) => {
+                const completed = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                renderTasks(completed, completedListContainer, true);
+            }, (error) => {
+                console.error("Error listening to completed tasks:", error);
+                showMessage("Error fetching completed list.");
+            });
+        }
+
+        /**
+         * Initializes the application, sets up Firebase, and authenticates the user.
+         */
+        async function setupApp() {
+            if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
+                showMessage("Firebase configuration is missing. The app cannot connect to the database.");
+                return;
+            }
+
+            try {
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        attachFirestoreListeners();
+                    } else {
+                        // Handle user being signed out
+                        userId = null;
+                        if (unsubscribeTodos) unsubscribeTodos();
+                        if (unsubscribeCompleted) unsubscribeCompleted();
+                        todoListContainer.innerHTML = '<p class="text-gray-500 text-center py-4">Please sign in to see your tasks.</p>';
+                        completedListContainer.innerHTML = '<p class="text-gray-500 text-center py-4">Please sign in to see your tasks.</p>';
+                    }
+                });
+
+                // Attempt to sign in with a provided token, otherwise sign in anonymously.
+                const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+                if (token) {
+                    await signInWithCustomToken(auth, token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+
+            } catch (error) {
+                console.error("Firebase Initialization Error:", error);
+                showMessage("Could not initialize the application. Please check the console for errors.");
+            }
+        }
+
+        // --- Event Listeners ---
+        addTaskBtn.addEventListener('click', addTask);
+        taskInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') {
+                addTask();
+            }
+        });
+
+        // --- App Start ---
+        window.onload = setupApp;
+
+    </script>
+</body>
+</html>
