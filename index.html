@@ -38,6 +38,8 @@
 <body class="bg-gray-900 text-white p-4 md:p-8">
 
     <div class="max-w-4xl mx-auto">
+        <!-- Version Display -->
+        <div id="version-display" class="text-center text-xs text-gray-500 mb-4"></div>
         <!-- Header -->
         <header class="text-center mb-8">
             <h1 class="text-4xl md:text-5xl font-bold text-white">My To-Do List</h1>
@@ -128,8 +130,20 @@
          * Saves the current `todos` and `completed` arrays to local storage.
          */
         function saveTasksToLocalStorage() {
-            localStorage.setItem(TODOS_STORAGE_KEY, JSON.stringify(todos));
-            localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(completed));
+            try {
+                localStorage.setItem(TODOS_STORAGE_KEY, JSON.stringify(todos));
+                console.log("Saved todos:", todos); // For user debugging
+            } catch (e) {
+                console.error("Error saving todos to localStorage:", e);
+                showMessage("Error: Could not save to-do tasks. Your browser's local storage might be full or disabled.");
+            }
+            try {
+                localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(completed));
+                console.log("Saved completed:", completed); // For user debugging
+            } catch (e) {
+                console.error("Error saving completed tasks to localStorage:", e);
+                showMessage("Error: Could not save completed tasks. Your browser's local storage might be full or disabled.");
+            }
         }
 
         // --- UI Elements ---
@@ -338,36 +352,37 @@
          * Adds a new task to the local 'todos' list and persists to local storage.
          */
         function addTask() {
+            console.log("addTask called"); // For user debugging
             const text = taskInput.value.trim();
             const dueDate = dateInput.value;
+            console.log("Task text:", text, "Due date:", dueDate); // For user debugging
 
             if (!text) {
                 showMessage('Please enter a task description.');
-                taskInput.focus(); // Optional: focus back on the input
+                taskInput.focus();
+                console.log("addTask: No text provided."); // For user debugging
                 return;
             }
 
             const newTask = {
                 id: generateId(),
                 text: text,
-                dueDate: dueDate || null, // Ensure empty string becomes null
+                dueDate: dueDate || null,
                 createdAt: new Date().toISOString()
             };
+            console.log("addTask: New task object created:", newTask); // For user debugging
 
             todos.push(newTask);
-            saveTasksToLocalStorage(); // Persist the updated todos array
-            renderTasks(todos, todoListContainer, false); // Re-render the to-do list
+            console.log("addTask: todos array after push:", todos); // For user debugging
 
-            taskInput.value = ''; // Clear the task input
-            // dateInput.value remains today's date (or user-changed) - this is fine.
-            // If we wanted to clear dateInput: dateInput.value = '';
-            // Or reset to today:
-            // const today = new Date();
-            // const year = today.getFullYear();
-            // const month = (today.getMonth() + 1).toString().padStart(2, '0');
-            // const day = today.getDate().toString().padStart(2, '0');
-            // dateInput.value = `${year}-${month}-${day}`;
-            taskInput.focus(); // Focus back on the task input for quick adding of next task
+            saveTasksToLocalStorage(); // This now has its own console.logs and error handling
+
+            console.log("addTask: Calling renderTasks for todos"); // For user debugging
+            renderTasks(todos, todoListContainer, false);
+
+            taskInput.value = '';
+            taskInput.focus();
+            console.log("addTask: Finished"); // For user debugging
         }
 
         /**
@@ -429,11 +444,33 @@
             renderTasks(completed, completedListContainer, true);
 
             // Set default date for date input to today
-            const today = new Date();
-            const year = today.getFullYear();
-            const month = (today.getMonth() + 1).toString().padStart(2, '0'); // Months are 0-indexed
-            const day = today.getDate().toString().padStart(2, '0');
-            dateInput.value = `${year}-${month}-${day}`;
+            const localDateInput = document.getElementById('date-input'); // Fetch element directly here
+            if (localDateInput) {
+                const today = new Date();
+                const year = today.getFullYear();
+                const month = (today.getMonth() + 1).toString().padStart(2, '0'); // Months are 0-indexed
+                const day = today.getDate().toString().padStart(2, '0');
+                const todayString = `${year}-${month}-${day}`;
+                localDateInput.value = todayString;
+                console.log("Default date set to:", todayString, "for element:", localDateInput); // For user debugging
+            } else {
+                console.error("Date input element not found in setupApp."); // For user debugging
+            }
+
+            // Display dynamic version string
+            const versionDisplay = document.getElementById('version-display');
+            if (versionDisplay) {
+                const now = new Date();
+                const year = now.getFullYear();
+                const month = (now.getMonth() + 1).toString().padStart(2, '0');
+                const day = now.getDate().toString().padStart(2, '0');
+                const hours = now.getHours().toString().padStart(2, '0');
+                const minutes = now.getMinutes().toString().padStart(2, '0');
+                versionDisplay.textContent = `Version: ${year}-${month}-${day}-${hours}-${minutes}`;
+                console.log("Version string set to:", versionDisplay.textContent); // For user debugging
+            } else {
+                console.error("Version display element not found."); // For user debugging
+            }
         }
 
         // --- Event Listeners ---
