@@ -84,20 +84,53 @@
     </div>
 
     <script type="module">
-        // Firebase Imports
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, collection, onSnapshot, addDoc, updateDoc, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // --- Local Storage Keys ---
+        const TODOS_STORAGE_KEY = 'todosList';
+        const COMPLETED_STORAGE_KEY = 'completedList';
 
-        // --- Firebase Configuration ---
-        // These variables are expected to be provided by the environment (like Canvas).
-        const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : {};
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-todo-app';
-        
-        // --- Firebase Services ---
-        let app, db, auth, userId;
-        let todosCollectionRef, completedCollectionRef;
-        let unsubscribeTodos, unsubscribeCompleted;
+        // --- App State ---
+        let todos = [];
+        let completed = [];
+
+        // --- Utility Functions ---
+        /**
+         * Generates a simple unique ID for tasks.
+         * For a more robust solution, a UUID library could be used.
+         */
+        function generateId() {
+            return Date.now().toString(36) + Math.random().toString(36).substring(2);
+        }
+
+        // --- Local Storage Functions ---
+        /**
+         * Loads tasks from local storage into the global `todos` and `completed` arrays.
+         */
+        function loadTasksFromLocalStorage() {
+            try {
+                const storedTodos = localStorage.getItem(TODOS_STORAGE_KEY);
+                todos = storedTodos ? JSON.parse(storedTodos) : [];
+            } catch (e) {
+                console.error("Error parsing todos from localStorage:", e);
+                todos = []; // Default to empty on error
+                localStorage.removeItem(TODOS_STORAGE_KEY); // Clear corrupted data
+            }
+            try {
+                const storedCompleted = localStorage.getItem(COMPLETED_STORAGE_KEY);
+                completed = storedCompleted ? JSON.parse(storedCompleted) : [];
+            } catch (e) {
+                console.error("Error parsing completed tasks from localStorage:", e);
+                completed = []; // Default to empty on error
+                localStorage.removeItem(COMPLETED_STORAGE_KEY); // Clear corrupted data
+            }
+        }
+
+        /**
+         * Saves the current `todos` and `completed` arrays to local storage.
+         */
+        function saveTasksToLocalStorage() {
+            localStorage.setItem(TODOS_STORAGE_KEY, JSON.stringify(todos));
+            localStorage.setItem(COMPLETED_STORAGE_KEY, JSON.stringify(completed));
+        }
 
         // --- UI Elements ---
         const taskInput = document.getElementById('task-input');
@@ -160,7 +193,7 @@
 
         /**
          * Creates an HTML element for a single task.
-         * @param {object} task - The task object from Firestore { id, text, dueDate }.
+         * @param {object} task - The task object { id, text, dueDate, createdAt, completedAt? }.
          * @param {boolean} isCompleted - Flag to determine if the task is in the completed list.
          * @returns {HTMLElement} The created task element.
          */
@@ -262,13 +295,29 @@
             input.value = currentText;
             input.className = 'bg-gray-600 text-white w-full rounded p-1 focus:outline-none focus:ring-2 focus:ring-indigo-500';
 
-            const saveChanges = async () => {
+            const saveChanges = () => {
                 const newText = input.value.trim();
                 if (newText && newText !== currentText) {
-                    const taskRef = doc(db, todosCollectionRef.path, task.id);
-                    await updateDoc(taskRef, { text: newText });
+                    const taskToEdit = todos.find(t => t.id === task.id);
+                    if (taskToEdit) {
+                        taskToEdit.text = newText;
+                        saveTasksToLocalStorage();
+                        renderTasks(todos, todoListContainer, false); // Re-render the list
+                    } else {
+                        // Should not happen if editing a task from the displayed list
+                        parent.replaceChild(textSpan, input); // Revert
+                        textSpan.textContent = currentText; // Restore old text
+                        showMessage("Error: Task not found for editing.");
+                    }
+                } else if (newText === currentText) {
+                    parent.replaceChild(textSpan, input); // No change, just revert UI
+                } else { // newText is empty
+                    parent.replaceChild(textSpan, input); // Revert to original
+                    textSpan.textContent = currentText;
+                    showMessage("Task text cannot be empty.");
                 }
-                // The onSnapshot listener will handle re-rendering, so we don't need to manually switch back.
+                // No explicit re-render needed here if saveTasks and renderTasks are called above
+                // or if reverting to textSpan, which onSnapshot would have handled (but now we do it manually)
             };
 
             input.addEventListener('blur', saveChanges);
@@ -286,161 +335,105 @@
         }
 
         /**
-         * Adds a new task to the Firestore 'todos' collection.
+         * Adds a new task to the local 'todos' list and persists to local storage.
          */
-        async function addTask() {
+        function addTask() {
             const text = taskInput.value.trim();
             const dueDate = dateInput.value;
 
             if (!text) {
                 showMessage('Please enter a task description.');
+                taskInput.focus(); // Optional: focus back on the input
                 return;
             }
 
-            try {
-                await addDoc(todosCollectionRef, {
-                    text: text,
-                    dueDate: dueDate || null, // Store null if no date is selected
-                    createdAt: new Date()
-                });
-                taskInput.value = '';
-                dateInput.value = '';
-            } catch (error) {
-                console.error("Error adding task: ", error);
-                showMessage("Failed to add task. Please try again.");
-            }
+            const newTask = {
+                id: generateId(),
+                text: text,
+                dueDate: dueDate || null, // Ensure empty string becomes null
+                createdAt: new Date().toISOString()
+            };
+
+            todos.push(newTask);
+            saveTasksToLocalStorage(); // Persist the updated todos array
+            renderTasks(todos, todoListContainer, false); // Re-render the to-do list
+
+            taskInput.value = ''; // Clear the task input
+            // dateInput.value remains today's date (or user-changed) - this is fine.
+            // If we wanted to clear dateInput: dateInput.value = '';
+            // Or reset to today:
+            // const today = new Date();
+            // const year = today.getFullYear();
+            // const month = (today.getMonth() + 1).toString().padStart(2, '0');
+            // const day = today.getDate().toString().padStart(2, '0');
+            // dateInput.value = `${year}-${month}-${day}`;
+            taskInput.focus(); // Focus back on the task input for quick adding of next task
         }
 
         /**
-         * Moves a task between the 'todos' and 'completed' collections.
+         * Moves a task between the 'todos' and 'completed' lists (locally).
          * @param {object} task - The task object to move.
          * @param {boolean} isCompleted - The current status of the task.
          */
-        async function toggleComplete(task, isCompleted) {
-            const batch = writeBatch(db);
-            
+        function toggleComplete(task, isCompleted) {
             if (isCompleted) {
                 // Move from 'completed' back to 'todos'
-                const fromRef = doc(db, completedCollectionRef.path, task.id);
-                const toRef = doc(db, todosCollectionRef.path, task.id);
-                
-                const taskData = { ...task };
-                delete taskData.id; // Don't store the id as a field
-                taskData.completedAt = null; // Remove completed timestamp
-                
-                batch.set(toRef, taskData);
-                batch.delete(fromRef);
-
+                const taskIndex = completed.findIndex(t => t.id === task.id);
+                if (taskIndex > -1) {
+                    const taskToMove = completed.splice(taskIndex, 1)[0];
+                    taskToMove.completedAt = null;
+                    todos.push(taskToMove);
+                }
             } else {
                 // Move from 'todos' to 'completed'
-                const fromRef = doc(db, todosCollectionRef.path, task.id);
-                const toRef = doc(db, completedCollectionRef.path, task.id);
-                
-                const taskData = { ...task };
-                delete taskData.id;
-                taskData.completedAt = new Date(); // Add a completed timestamp
-
-                batch.set(toRef, taskData);
-                batch.delete(fromRef);
+                const taskIndex = todos.findIndex(t => t.id === task.id);
+                if (taskIndex > -1) {
+                    const taskToMove = todos.splice(taskIndex, 1)[0];
+                    taskToMove.completedAt = new Date().toISOString();
+                    completed.push(taskToMove);
+                }
             }
-
-            try {
-                await batch.commit();
-            } catch (error) {
-                console.error("Error moving task: ", error);
-                showMessage("Could not update task status. Please try again.");
-            }
+            saveTasksToLocalStorage();
+            renderTasks(todos, todoListContainer, false);
+            renderTasks(completed, completedListContainer, true);
         }
 
         /**
-         * Deletes a task from its collection in Firestore.
+         * Deletes a task from local lists.
          * @param {string} taskId - The ID of the task to delete.
          * @param {boolean} isCompleted - Whether the task is in the completed list.
          */
-        async function deleteTask(taskId, isCompleted) {
-            const collection = isCompleted ? completedCollectionRef : todosCollectionRef;
-            const taskRef = doc(db, collection.path, taskId);
-            try {
-                await deleteDoc(taskRef);
-            } catch (error) {
-                console.error("Error deleting task: ", error);
-                showMessage("Failed to delete task. Please try again.");
+        function deleteTask(taskId, isCompleted) {
+            if (isCompleted) {
+                completed = completed.filter(t => t.id !== taskId);
+            } else {
+                todos = todos.filter(t => t.id !== taskId);
             }
-        }
-
-        /**
-         * Sets up Firestore snapshot listeners to react to data changes in real-time.
-         */
-        function attachFirestoreListeners() {
-            if (!userId) return;
-
-            // Define collection references
-            todosCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/todos`);
-            completedCollectionRef = collection(db, `artifacts/${appId}/users/${userId}/completed`);
-
-            // Unsubscribe from previous listeners if they exist
-            if (unsubscribeTodos) unsubscribeTodos();
-            if (unsubscribeCompleted) unsubscribeCompleted();
-
-            // Listener for the 'todos' collection
-            unsubscribeTodos = onSnapshot(todosCollectionRef, (snapshot) => {
-                const todos = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                renderTasks(todos, todoListContainer, false);
-            }, (error) => {
-                console.error("Error listening to todos:", error);
-                showMessage("Error fetching to-do list.");
-            });
-
-            // Listener for the 'completed' collection
-            unsubscribeCompleted = onSnapshot(completedCollectionRef, (snapshot) => {
-                const completed = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+            saveTasksToLocalStorage();
+            // Re-render the appropriate list
+            if (isCompleted) {
                 renderTasks(completed, completedListContainer, true);
-            }, (error) => {
-                console.error("Error listening to completed tasks:", error);
-                showMessage("Error fetching completed list.");
-            });
+            } else {
+                renderTasks(todos, todoListContainer, false);
+            }
         }
 
+        // Removed attachFirestoreListeners function
+
         /**
-         * Initializes the application, sets up Firebase, and authenticates the user.
+         * Initializes the application and loads data from local storage.
          */
-        async function setupApp() {
-            if (!firebaseConfig || Object.keys(firebaseConfig).length === 0) {
-                showMessage("Firebase configuration is missing. The app cannot connect to the database.");
-                return;
-            }
+        function setupApp() {
+            loadTasksFromLocalStorage();
+            renderTasks(todos, todoListContainer, false);
+            renderTasks(completed, completedListContainer, true);
 
-            try {
-                app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
-                auth = getAuth(app);
-
-                onAuthStateChanged(auth, (user) => {
-                    if (user) {
-                        userId = user.uid;
-                        attachFirestoreListeners();
-                    } else {
-                        // Handle user being signed out
-                        userId = null;
-                        if (unsubscribeTodos) unsubscribeTodos();
-                        if (unsubscribeCompleted) unsubscribeCompleted();
-                        todoListContainer.innerHTML = '<p class="text-gray-500 text-center py-4">Please sign in to see your tasks.</p>';
-                        completedListContainer.innerHTML = '<p class="text-gray-500 text-center py-4">Please sign in to see your tasks.</p>';
-                    }
-                });
-
-                // Attempt to sign in with a provided token, otherwise sign in anonymously.
-                const token = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
-                if (token) {
-                    await signInWithCustomToken(auth, token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-
-            } catch (error) {
-                console.error("Firebase Initialization Error:", error);
-                showMessage("Could not initialize the application. Please check the console for errors.");
-            }
+            // Set default date for date input to today
+            const today = new Date();
+            const year = today.getFullYear();
+            const month = (today.getMonth() + 1).toString().padStart(2, '0'); // Months are 0-indexed
+            const day = today.getDate().toString().padStart(2, '0');
+            dateInput.value = `${year}-${month}-${day}`;
         }
 
         // --- Event Listeners ---
